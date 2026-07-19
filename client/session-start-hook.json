@@ -1,0 +1,9 @@
+{
+  "matcher": "",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "if [ -n \"$CLAUDE_JOB_DIR\" ]; then setsid nohup xats-keepalive </dev/null &>/dev/null & fi"
+    }
+  ]
+}

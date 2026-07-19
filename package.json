@@ -1,0 +1,20 @@
+{
+  "name": "cross-agent-teams-mcp-patched",
+  "version": "0.7.4-patched",
+  "description": "Patched cross-agent-teams-mcp daemon with Fixes A-E: uniform reaping, reachability-gated send, xats-status CLI, CC keepalive, claude-job delivery + wake",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --external:better-sqlite3 --external:fastify --external:@modelcontextprotocol/sdk --external:zod --external:json-schema-diff-validator --outfile=dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "better-sqlite3": "*",
+    "fastify": "*",
+    "@modelcontextprotocol/sdk": "*",
+    "zod": "*",
+    "json-schema-diff-validator": "*"
+  },
+  "devDependencies": {
+    "esbuild": "*"
+  }
+}

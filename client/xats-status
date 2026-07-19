@@ -1,0 +1,61 @@
+#!/bin/bash
+# xats-status: quick agent status table for xats daemon
+# Usage: xats-status [team]
+set -euo pipefail
+
+TEAM="${1:-default}"
+PORT="${XATS_PORT:-9100}"
+
+echo "=== xats-status (team: $TEAM, port: $PORT) ==="
+echo ""
+
+# Health
+HEALTH=$(curl -sf "http://127.0.0.1:$PORT/health" 2>/dev/null || echo '{"ok":false}')
+OK=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ok',False))" 2>/dev/null || echo "false")
+if [ "$OK" != "True" ] && [ "$OK" != "true" ]; then
+    echo "DAEMON: DOWN or unreachable"
+    exit 1
+fi
+VERSION=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null)
+UPTIME=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('uptime_seconds',0))" 2>/dev/null)
+echo "DAEMON: ok (v$VERSION, uptime ${UPTIME}s)"
+echo ""
+
+# Agents
+curl -sf "http://127.0.0.1:$PORT/api/agents?team=$TEAM" 2>/dev/null | python3 -c "
+import sys, json
+from datetime import datetime, timezone
+
+d = json.load(sys.stdin)
+agents = d.get('agents', [])
+if not agents:
+    print('No agents registered.')
+    sys.exit(0)
+
+print(f'  {\"NAME\":<45} {\"DEVICE\":<20} {\"ONLINE\":<8} {\"LAST SEEN\":<15} {\"REACHABLE\"}')
+print('  ' + '-' * 95)
+
+now = datetime.now(timezone.utc)
+for a in sorted(agents, key=lambda x: (not x.get('online',False), x.get('name',''))):
+    name = a.get('name','?')
+    device = a.get('device','?')
+    online = a.get('online', False)
+    last = a.get('last_seen_at','')
+    age = '?'
+    reachable = 'no'
+    if last:
+        try:
+            dt = datetime.fromisoformat(last.replace('Z','+00:00'))
+            age_s = (now - dt).total_seconds()
+            if age_s < 60:
+                age = f'{age_s:.0f}s ago'
+            elif age_s < 3600:
+                age = f'{age_s/60:.0f}m ago'
+            else:
+                age = f'{age_s/3600:.1f}h ago'
+            reachable = 'yes' if age_s <= 180 else 'no'
+        except:
+            pass
+    status = 'Y' if online else 'N'
+    print(f'  {name:<45} {device:<20} {status:<8} {age:<15} {reachable}')
+" 2>/dev/null

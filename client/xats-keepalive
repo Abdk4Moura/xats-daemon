@@ -1,0 +1,128 @@
+#!/bin/bash
+# xats-keepalive: automatic keepalive for Claude Code agents on the xats bus.
+#
+# Keeps the agent's identity alive (heartbeat via re-register), peeks the
+# SQLite inbox for new mail, and touches $CLAUDE_JOB_DIR/.xats-wake so the
+# armed Monitor re-invokes the agent to read it.
+#
+# Identity sources (priority):
+#   1. XATS_NAME env (explicit override)
+#   2. Derived from job context: claude-do-vm-job-<JOB_ID>
+#   3. Interactive fallback: claude-<hostname>-<8char-random>
+#
+# Exit conditions:
+#   - $CLAUDE_JOB_DIR stops existing (self-clean, no orphan loops)
+#   - SIGTERM/SIGINT received
+#
+# Usage: xats-keepalive (auto-launched by SessionStart hook)
+#        xats-keepalive --job-dir /path/to/job (manual override)
+
+set -euo pipefail
+
+# --- Configuration ---
+DAEMON_URL="${XATS_DAEMON_URL:-http://127.0.0.1:9100}"
+TEAM="${XATS_TEAM:-default}"
+DB="${XATS_DB:-$HOME/.cross-agent-teams-mcp/data.db}"
+INTERVAL="${XATS_KEEPALIVE_INTERVAL:-40}"
+HOSTNAME="${HOSTNAME:-$(hostname)}"
+
+# --- Identity resolution ---
+resolve_name() {
+  if [ -n "${XATS_NAME:-}" ]; then
+    echo "$XATS_NAME"
+    return
+  fi
+
+  # Job context: derive from CLAUDE_JOB_DIR
+  if [ -n "${CLAUDE_JOB_DIR:-}" ]; then
+    local job_id
+    job_id=$(basename "$CLAUDE_JOB_DIR")
+    echo "claude-${HOSTNAME}-job-${job_id}"
+    return
+  fi
+
+  # Interactive fallback
+  local suffix
+  suffix=$(head -c4 /dev/urandom | xxd -p 2>/dev/null || echo "0000")
+  echo "claude-${HOSTNAME}-${suffix}"
+}
+
+resolve_job_dir() {
+  # Parse --job-dir flag, or use CLAUDE_JOB_DIR
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --job-dir) JOB_DIR="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  echo "${JOB_DIR:-${CLAUDE_JOB_DIR:-}}"
+}
+
+# --- Parse args ---
+JOB_DIR=""
+resolve_job_dir "$@"
+JOB_DIR="${JOB_DIR:-${CLAUDE_JOB_DIR:-}}"
+
+NAME=$(resolve_name)
+WAKE_FILE=""
+CURSOR_FILE=""
+
+if [ -n "$JOB_DIR" ]; then
+  WAKE_FILE="$JOB_DIR/.xats-wake"
+  CURSOR_FILE="$JOB_DIR/tmp/xats-cursor"
+  mkdir -p "$JOB_DIR/tmp"
+fi
+
+# --- Singleton guard ---
+LOCK="${JOB_DIR:+$JOB_DIR/tmp/xats-keepalive.lock}"
+LOCK="${LOCK:-/tmp/xats-keepalive-$NAME.lock}"
+exec 9>"$LOCK"
+flock -n 9 || { echo "[xats-keepalive] already running, exiting"; exit 0; }
+
+# --- Signal handling ---
+RUNNING=true
+cleanup() { RUNNING=false; }
+trap cleanup SIGTERM SIGINT
+
+# --- Main loop ---
+echo "[xats-keepalive] starting: name=$NAME team=$TEAM job_dir=${JOB_DIR:-interactive} interval=${INTERVAL}s"
+
+while $RUNNING; do
+  # Self-clean: exit if job_dir was deleted (agent session ended)
+  if [ -n "$JOB_DIR" ] && [ ! -d "$JOB_DIR" ]; then
+    echo "[xats-keepalive] job_dir gone, exiting"
+    exit 0
+  fi
+
+  # Heartbeat: re-register to keep last_seen_at fresh
+  curl -sS -f -X POST "$DAEMON_URL/api/register" \
+    -H 'Content-Type: application/json' \
+    -d "{\"name\":\"$NAME\",\"team\":\"$TEAM\",\"role\":\"worker\",\"agent_type\":\"claude-code\"}" \
+    >/dev/null 2>&1 || true
+
+  # Peek SQLite for new mail (read-only, does NOT advance inbox cursor)
+  if [ -n "$DB" ] && [ -f "$DB" ] && [ -n "$WAKE_FILE" ]; then
+    local_last=$(cat "$CURSOR_FILE" 2>/dev/null || echo 0)
+    # Query: messages addressed to this agent with event_id > cursor
+    new_count=$(sqlite3 "$DB" \
+      "SELECT COUNT(*) FROM messages m
+       WHERE m.to_agent_id IN (SELECT agent_id FROM agents WHERE name='$NAME' AND team='$TEAM')
+         AND m.event_id > $local_last;" 2>/dev/null || echo "0")
+
+    if [ -n "$new_count" ] && [ "$new_count" -gt 0 ] 2>/dev/null; then
+      # Get the max event_id to advance our local cursor
+      max_id=$(sqlite3 "$DB" \
+        "SELECT COALESCE(MAX(m.event_id),0) FROM messages m
+         WHERE m.to_agent_id IN (SELECT agent_id FROM agents WHERE name='$NAME' AND team='$TEAM')
+           AND m.event_id > $local_last;" 2>/dev/null || echo "$local_last")
+      echo "$max_id" > "$CURSOR_FILE"
+      # Touch wake file to trigger the Monitor
+      touch "$WAKE_FILE"
+      echo "[xats-keepalive] new mail detected ($new_count msg(s)), woke agent"
+    fi
+  fi
+
+  sleep "$INTERVAL"
+done
+
+echo "[xats-keepalive] exited"
