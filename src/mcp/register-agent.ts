@@ -141,7 +141,7 @@ export class RegisterAgentService {
       if ('error' in validTeam) return validTeam
     }
     const resolvedDevice = resolveEffectiveDevice({
-      requestedDevice: input.device,
+      requestedDevice: input.device ?? undefined,
       originInfo: this.deps.getSessionOrigin?.(input.connection_id),
       localDevice: this.deps.localDevice ?? 'local',
     })

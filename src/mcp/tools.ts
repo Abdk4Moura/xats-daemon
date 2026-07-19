@@ -377,7 +377,7 @@ export function registerBusinessTools(
   const registerAgentInputSchema = z.object({
     model: z.string().optional(),
     name: z.string().min(1).refine(v => v.trim().length > 0, { message: 'name must not be empty' }),
-    device: z.string().optional(),
+    device: z.string().nullish(),
     role: z.string().optional(),
     team: z.string().optional(),
     project_dir: z.string().min(1).optional(),
@@ -579,7 +579,7 @@ export function registerBusinessTools(
       autoBindChannelSvc
     ) {
       const effectiveDevice = resolveEffectiveDevice({
-        requestedDevice: args.device,
+        requestedDevice: args.device ?? undefined,
         originInfo: getSessionOriginInfo?.(),
         localDevice: context?.localDevice ?? 'local',
       })

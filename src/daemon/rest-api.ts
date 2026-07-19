@@ -162,7 +162,7 @@ const registerBodySchema = z.object({
   name: z.string().min(1),
   team: z.string().optional(),
   role: z.string().optional(),
-  device: z.string().optional(),
+  device: z.string().nullish(),
   agent_type: z.string().optional(),
   agent_type_name: z.string().optional(),
   model: z.string().optional(),
@@ -208,7 +208,7 @@ async function handleRegister(ctx: RestCtx, req: FastifyRequest, reply: FastifyR
   }
 
   const deviceResult = resolveEffectiveDevice({
-    requestedDevice: data.device,
+    requestedDevice: data.device ?? undefined,
     localDevice: ctx.localDevice,
   })
   if ('error' in deviceResult) return reply.code(400).send({ error: deviceResult.error })
