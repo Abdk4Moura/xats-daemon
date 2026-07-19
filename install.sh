@@ -116,7 +116,8 @@ fi
 echo "[restart] restarting daemon..."
 pkill -f "cross-agent-teams-mcp.*daemon" 2>/dev/null || true
 sleep 1
-setsid /usr/bin/node "$DEST" daemon --port 9100 > /tmp/xats-daemon.log 2>&1 &
+NODE_BIN=$(which node)
+setsid "$NODE_BIN" "$DEST" daemon --port 9100 > /tmp/xats-daemon.log 2>&1 &
 DAEMON_PID=$!
 sleep 3
 
